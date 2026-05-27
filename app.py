@@ -2,6 +2,7 @@ import os
 
 import streamlit as st
 
+from src.database import get_table_counts, init_db
 from src.utils import (
     ensure_dirs,
     get_data_dir,
@@ -31,6 +32,20 @@ def show_environment_info() -> None:
     st.write("LLM_PROVIDER:", get_llm_provider())
 
 
+def show_table_counts() -> None:
+    try:
+        counts = get_table_counts()
+    except Exception as exc:
+        st.error(f"读取数据库状态失败：{exc}")
+        return
+
+    st.subheader("数据库表状态")
+    st.write("admission_records 记录数:", counts.get("admission_records", "未初始化"))
+    st.write("university_profiles 记录数:", counts.get("university_profiles", "未初始化"))
+    st.write("major_profiles 记录数:", counts.get("major_profiles", "未初始化"))
+    st.write("employment_profiles 记录数:", counts.get("employment_profiles", "未初始化"))
+
+
 def show_home() -> None:
     st.title(APP_TITLE)
     st.write(
@@ -43,6 +58,13 @@ def show_home() -> None:
 def show_data_import() -> None:
     st.title("数据导入")
     st.info("这里将用于导入院校、专业、分数线等基础数据。当前阶段仅保留页面占位。")
+
+    if st.button("初始化数据库"):
+        try:
+            init_db()
+            st.success("数据库初始化成功")
+        except Exception as exc:
+            st.error(f"数据库初始化失败：{exc}")
 
 
 def show_recommendation() -> None:
@@ -57,12 +79,15 @@ def show_system_status() -> None:
 
     st.title("系统状态")
     st.info("这里将用于展示系统运行状态、数据连接状态和模型配置。")
+
     st.subheader("基础配置")
     st.write("数据库路径:", db_path)
     st.write("数据目录:", data_dir)
     st.write("LLM_PROVIDER:", llm_provider)
     st.write("LLM 是否启用:", "是" if is_llm_enabled() else "否")
     st.write("数据库文件是否存在:", "是" if db_path.exists() else "否")
+
+    show_table_counts()
 
 
 PAGES = {
