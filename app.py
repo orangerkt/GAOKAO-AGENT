@@ -2,6 +2,14 @@ import os
 
 import streamlit as st
 
+from src.utils import (
+    ensure_dirs,
+    get_data_dir,
+    get_db_path,
+    get_llm_provider,
+    is_llm_enabled,
+)
+
 
 APP_TITLE = "内蒙古高考志愿推荐智能体原型系统"
 
@@ -12,13 +20,15 @@ st.set_page_config(
     layout="wide",
 )
 
+ensure_dirs()
+
 
 def show_environment_info() -> None:
     st.subheader("当前环境信息")
     st.write("APP_ENV:", os.getenv("APP_ENV", "未设置"))
-    st.write("DB_PATH:", os.getenv("DB_PATH", "./db/gaokao.db"))
-    st.write("DATA_DIR:", os.getenv("DATA_DIR", "./data"))
-    st.write("LLM_PROVIDER:", os.getenv("LLM_PROVIDER", "none"))
+    st.write("DB_PATH:", get_db_path())
+    st.write("DATA_DIR:", get_data_dir())
+    st.write("LLM_PROVIDER:", get_llm_provider())
 
 
 def show_home() -> None:
@@ -41,9 +51,18 @@ def show_recommendation() -> None:
 
 
 def show_system_status() -> None:
+    db_path = get_db_path()
+    data_dir = get_data_dir()
+    llm_provider = get_llm_provider()
+
     st.title("系统状态")
     st.info("这里将用于展示系统运行状态、数据连接状态和模型配置。")
-    show_environment_info()
+    st.subheader("基础配置")
+    st.write("数据库路径:", db_path)
+    st.write("数据目录:", data_dir)
+    st.write("LLM_PROVIDER:", llm_provider)
+    st.write("LLM 是否启用:", "是" if is_llm_enabled() else "否")
+    st.write("数据库文件是否存在:", "是" if db_path.exists() else "否")
 
 
 PAGES = {
