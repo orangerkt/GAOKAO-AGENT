@@ -1,0 +1,19 @@
+services:
+  gaokao-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gaokao-agent
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      - APP_ENV=development
+      - DB_PATH=/app/db/gaokao.db
+      - DATA_DIR=/app/data
+    volumes:
+      - ./:/app
+      - ./data:/app/data
+      - ./db:/app/db
+    command: streamlit run app.py --server.address=0.0.0.0 --server.port=8501
