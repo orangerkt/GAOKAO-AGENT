@@ -5,7 +5,7 @@ import sqlite3
 import pandas as pd
 
 from src.database import get_connection
-from src.explainer import build_reason, build_risk_warning
+from src.explainer import generate_reason, generate_risk_warning
 from src.scoring import calculate_total_score, classify_tier, get_university_level
 
 
@@ -110,6 +110,13 @@ def recommend_programs(user_profile: dict) -> pd.DataFrame:
         if column in result.columns:
             result[column] = pd.to_numeric(result[column], errors="coerce")
 
+    for column in ["employment_rate", "postgraduate_rate", "recommended_graduate_rate"]:
+        missing_column = f"{column}_missing"
+        if column in result.columns:
+            result[missing_column] = result[column].isna()
+        else:
+            result[missing_column] = True
+
     for column in [
         "employment_rate",
         "postgraduate_rate",
@@ -131,8 +138,8 @@ def recommend_programs(user_profile: dict) -> pd.DataFrame:
     result["tier"] = result["min_rank"].apply(lambda min_rank: classify_tier(min_rank, current_rank))
     result["university_level"] = result.apply(get_university_level, axis=1)
     result["total_score"] = result.apply(lambda row: calculate_total_score(row, user_profile), axis=1)
-    result["reason"] = result.apply(lambda row: build_reason(row, user_profile), axis=1)
-    result["risk_warning"] = result.apply(lambda row: build_risk_warning(row, current_rank), axis=1)
+    result["reason"] = result.apply(lambda row: generate_reason(row, user_profile), axis=1)
+    result["risk_warning"] = result.apply(lambda row: generate_risk_warning(row, current_rank), axis=1)
 
     result = result.sort_values(
         by=["total_score", "tier", "min_rank"],
