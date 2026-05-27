@@ -2,7 +2,13 @@ import os
 
 import streamlit as st
 
-from src.database import get_table_counts, init_db
+from src.database import (
+    TABLE_NAMES,
+    get_table_counts,
+    import_csv_to_table,
+    import_sample_data,
+    init_db,
+)
 from src.utils import (
     ensure_dirs,
     get_data_dir,
@@ -13,6 +19,13 @@ from src.utils import (
 
 
 APP_TITLE = "内蒙古高考志愿推荐智能体原型系统"
+
+UPLOAD_LABELS = {
+    "admission_records": "上传 admission_records.csv",
+    "university_profiles": "上传 university_profiles.csv",
+    "major_profiles": "上传 major_profiles.csv",
+    "employment_profiles": "上传 employment_profiles.csv",
+}
 
 
 st.set_page_config(
@@ -57,14 +70,44 @@ def show_home() -> None:
 
 def show_data_import() -> None:
     st.title("数据导入")
-    st.info("这里将用于导入院校、专业、分数线等基础数据。当前阶段仅保留页面占位。")
+    st.info("这里用于初始化本地 SQLite 数据库，并导入示例或上传的 CSV 数据。")
 
-    if st.button("初始化数据库"):
-        try:
-            init_db()
-            st.success("数据库初始化成功")
-        except Exception as exc:
-            st.error(f"数据库初始化失败：{exc}")
+    action_col_1, action_col_2 = st.columns(2)
+    with action_col_1:
+        if st.button("初始化数据库"):
+            try:
+                init_db()
+                st.success("数据库初始化成功")
+            except Exception as exc:
+                st.error(f"数据库初始化失败：{exc}")
+
+    with action_col_2:
+        if st.button("导入示例数据"):
+            try:
+                imported_counts = import_sample_data()
+                total_count = sum(imported_counts.values())
+                st.success(f"示例数据导入成功，共导入 {total_count} 条记录。")
+            except Exception as exc:
+                st.error(f"示例数据导入失败：{exc}")
+
+    st.subheader("上传 CSV")
+    for table_name in TABLE_NAMES:
+        uploaded_file = st.file_uploader(
+            UPLOAD_LABELS[table_name],
+            type=["csv"],
+            key=f"upload_{table_name}",
+        )
+        if uploaded_file is not None and st.button(
+            f"导入到 {table_name}",
+            key=f"import_{table_name}",
+        ):
+            try:
+                imported_count = import_csv_to_table(uploaded_file, table_name)
+                st.success(f"{table_name} 导入成功，共导入 {imported_count} 条记录。")
+            except Exception as exc:
+                st.error(f"{table_name} 导入失败：{exc}")
+
+    show_table_counts()
 
 
 def show_recommendation() -> None:
