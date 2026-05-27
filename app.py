@@ -9,6 +9,7 @@ from src.database import (
     import_sample_data,
     init_db,
 )
+from src.recommender import recommend_programs
 from src.utils import (
     ensure_dirs,
     get_data_dir,
@@ -27,6 +28,26 @@ UPLOAD_LABELS = {
     "employment_profiles": "上传 employment_profiles.csv",
 }
 
+DISPLAY_COLUMNS = {
+    "tier": "档位",
+    "university_name": "院校",
+    "major_name": "专业",
+    "school_province": "院校省份",
+    "city": "城市",
+    "university_level": "院校层次",
+    "min_score": "最低分",
+    "min_rank": "最低位次",
+    "plan_count": "计划数",
+    "rank_diff": "位次差",
+    "employment_rate": "就业率",
+    "postgraduate_rate": "升学率",
+    "recommended_graduate_rate": "保研/推免参考",
+    "public_exam_fit_score": "考公适配度",
+    "total_score": "综合分",
+    "reason": "推荐理由",
+    "risk_warning": "风险提示",
+}
+
 
 st.set_page_config(
     page_title=APP_TITLE,
@@ -35,6 +56,11 @@ st.set_page_config(
 )
 
 ensure_dirs()
+
+
+def parse_multi_input(value: str) -> list[str]:
+    normalized = value.replace("，", ",").replace("；", ",").replace(";", ",")
+    return [item.strip() for item in normalized.split(",") if item.strip()]
 
 
 def show_environment_info() -> None:
@@ -63,7 +89,7 @@ def show_home() -> None:
     st.title(APP_TITLE)
     st.write(
         "这是一个面向内蒙古高考志愿填报场景的原型系统。"
-        "当前阶段用于验证 Streamlit 页面、Docker 启动环境和基础项目结构。"
+        "当前阶段用于验证 Streamlit 页面、Docker 启动环境、数据导入和最小推荐流程。"
     )
     show_environment_info()
 
@@ -112,7 +138,53 @@ def show_data_import() -> None:
 
 def show_recommendation() -> None:
     st.title("志愿推荐")
-    st.info("这里将用于根据考生信息生成志愿推荐。当前阶段暂不实现推荐算法。")
+    st.info("推荐结果全部来自本地数据库。请先在“数据导入”页面初始化数据库并导入数据。")
+
+    with st.form("recommendation_form"):
+        col_1, col_2, col_3 = st.columns(3)
+        with col_1:
+            current_rank = st.number_input("考生位次", min_value=1, value=12000, step=100)
+            category = st.selectbox("科类/类别", ["理科", "文科", "物理类", "历史类"])
+            risk_preference = st.selectbox("风险偏好", ["均衡", "稳妥", "冲刺"])
+        with col_2:
+            preferred_provinces = st.text_input("意向省份", value="内蒙古自治区,辽宁省")
+            preferred_cities = st.text_input("意向城市", value="呼和浩特,沈阳")
+            top_k = st.number_input("返回数量", min_value=1, max_value=100, value=30, step=1)
+        with col_3:
+            preferred_university_levels = st.multiselect(
+                "意向院校层次",
+                ["985", "211", "双一流", "普通本科"],
+                default=["211", "双一流"],
+            )
+            preferred_major_keywords = st.text_input("意向专业关键词", value="计算机,软件")
+
+        submitted = st.form_submit_button("生成推荐")
+
+    if submitted:
+        user_profile = {
+            "current_rank": int(current_rank),
+            "category": category,
+            "preferred_provinces": parse_multi_input(preferred_provinces),
+            "preferred_cities": parse_multi_input(preferred_cities),
+            "preferred_university_levels": preferred_university_levels,
+            "preferred_major_keywords": parse_multi_input(preferred_major_keywords),
+            "risk_preference": risk_preference,
+            "top_k": int(top_k),
+        }
+
+        try:
+            recommendations = recommend_programs(user_profile)
+        except Exception as exc:
+            st.error(f"生成推荐失败：{exc}")
+            return
+
+        if recommendations.empty:
+            st.warning("数据库中暂时没有匹配的推荐结果。请确认已导入录取数据，并检查科类/类别是否匹配。")
+            return
+
+        display_df = recommendations.rename(columns=DISPLAY_COLUMNS)
+        st.subheader("推荐结果")
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 
 def show_system_status() -> None:
