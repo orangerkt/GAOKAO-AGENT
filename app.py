@@ -4,10 +4,25 @@ import streamlit as st
 
 from src.database import (
     TABLE_NAMES,
+    get_connection,
+    get_recent_raw_files,
     get_table_counts,
+    get_table_row_counts,
     import_csv_to_table,
     import_sample_data,
     init_db,
+)
+from src.data_importer import (
+    DATA_TYPE_TO_TABLE,
+    PDF_SAVED_ONLY_MESSAGE,
+    get_mappable_columns,
+    get_target_table,
+    guess_field_mapping,
+    import_dataframe_to_standard_table,
+    is_save_only_data_type,
+    read_tabular_file,
+    save_and_register_upload,
+    update_raw_file_status,
 )
 from src.recommender import recommend_programs
 from src.utils import (
@@ -47,6 +62,30 @@ DISPLAY_COLUMNS = {
     "reason": "推荐理由",
     "risk_warning": "风险提示",
 }
+
+REAL_DATA_TYPE_OPTIONS = [
+    "一分一段表",
+    "批次线",
+    "招生计划",
+    "投档线",
+    "录取结果",
+    "选科要求",
+    "招生章程",
+    "就业质量报告",
+    "保研/推免数据",
+    "公务员岗位表",
+]
+
+STANDARD_DATA_TABLES = [
+    "raw_files",
+    "score_rank",
+    "control_lines",
+    "admission_plans",
+    "admission_results",
+    "subject_requirements",
+    "charter_constraints",
+    "civil_service_positions",
+]
 
 
 st.set_page_config(
@@ -136,6 +175,200 @@ def show_data_import() -> None:
     show_table_counts()
 
 
+def _show_quality_report(report: dict) -> None:
+    st.subheader("数据质量报告")
+    st.write("目标表:", report.get("target_table") or "仅保存原始文件")
+    st.write("总行数:", report.get("total_rows", 0))
+    st.write("成功导入行数:", report.get("imported_rows", 0))
+    st.write("缺失关键字段行数:", report.get("missing_key_rows", 0))
+    st.write("重复行数:", report.get("duplicate_rows", 0))
+
+    unrecognized_columns = report.get("unrecognized_columns") or []
+    if unrecognized_columns:
+        st.write("无法识别字段:", "、".join(unrecognized_columns))
+    else:
+        st.write("无法识别字段:", "无")
+
+    suggestions = report.get("suggestions") or []
+    if suggestions:
+        st.write("建议人工检查项:")
+        for suggestion in suggestions:
+            st.write("-", suggestion)
+    else:
+        st.write("建议人工检查项: 暂无")
+
+
+def _show_recent_raw_files() -> None:
+    st.subheader("最近上传记录")
+    try:
+        with get_connection() as connection:
+            rows = get_recent_raw_files(connection, limit=20)
+    except Exception:
+        rows = None
+
+    if rows is None:
+        st.info("raw_files 表尚未创建或暂无上传记录。")
+        return
+    if not rows:
+        st.info("暂无上传记录。")
+        return
+
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
+def _show_standard_table_stats() -> None:
+    st.subheader("标准数据表统计")
+    try:
+        with get_connection() as connection:
+            rows = get_table_row_counts(connection, STANDARD_DATA_TABLES)
+    except Exception:
+        rows = [
+            {"table_name": table_name, "row_count": 0, "status": "missing"}
+            for table_name in STANDARD_DATA_TABLES
+        ]
+
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
+def _show_real_data_bottom_sections() -> None:
+    _show_recent_raw_files()
+    _show_standard_table_stats()
+
+
+def show_real_data_import() -> None:
+    st.title("真实数据导入")
+    st.info("本页用于保存真实数据原始文件，并将 CSV / Excel 按字段映射结构化入库。PDF 当前仅保存登记。")
+    init_db()
+
+    with st.form("real_data_upload_form", clear_on_submit=False):
+        uploaded_file = st.file_uploader(
+            "上传文件",
+            type=["csv", "xlsx", "xls", "pdf"],
+            key="real_data_file",
+        )
+        col_1, col_2, col_3 = st.columns(3)
+        with col_1:
+            year = st.number_input("数据年份 year", min_value=2000, max_value=2100, value=2025, step=1)
+            province = st.text_input("省份 province", value="内蒙古")
+        with col_2:
+            category = st.text_input("科类/类别 category（可为空）", value="")
+            data_type = st.selectbox("数据类型 data_type", REAL_DATA_TYPE_OPTIONS)
+        with col_3:
+            source_name = st.text_input("来源名称 source_name", value="")
+            source_url = st.text_input("来源链接 source_url", value="")
+
+        save_submitted = st.form_submit_button("保存并预览")
+
+    if save_submitted:
+        if uploaded_file is None:
+            st.warning("请先上传文件。")
+        else:
+            raw_file_id = None
+            try:
+                record = save_and_register_upload(
+                    uploaded_file,
+                    year=int(year),
+                    data_type=data_type,
+                    source_name=source_name.strip() or None,
+                    source_url=source_url.strip() or None,
+                )
+                raw_file_id = record.id
+                target_table = get_target_table(data_type)
+                state = {
+                    "raw_file_id": record.id,
+                    "saved_path": str(record.saved_path),
+                    "year": int(year),
+                    "province": province.strip() or None,
+                    "category": category.strip() or None,
+                    "data_type": data_type,
+                    "source_url": source_url.strip() or None,
+                    "target_table": target_table,
+                    "df": None,
+                    "mapping": {},
+                }
+
+                if record.saved_path.suffix.lower() == ".pdf":
+                    st.session_state["real_data_import_state"] = state
+                    st.success(PDF_SAVED_ONLY_MESSAGE)
+                elif is_save_only_data_type(data_type):
+                    message = "该数据类型当前版本仅保存原始文件，不执行结构化入库。"
+                    update_raw_file_status(record.id, "saved_only", message)
+                    st.session_state["real_data_import_state"] = state
+                    st.info(message)
+                elif target_table is None:
+                    message = "暂不支持该数据类型的结构化入库。"
+                    update_raw_file_status(record.id, "failed", message)
+                    st.session_state["real_data_import_state"] = state
+                    st.error(message)
+                else:
+                    df = read_tabular_file(record.saved_path)
+                    mapping = guess_field_mapping(target_table, list(df.columns))
+                    state["df"] = df
+                    state["mapping"] = mapping
+                    st.session_state["real_data_import_state"] = state
+                    st.success("文件已保存并读取成功，请检查预览和字段映射。")
+            except Exception as exc:
+                if raw_file_id is not None:
+                    update_raw_file_status(int(raw_file_id), "failed", str(exc))
+                st.error(f"保存或读取失败：{exc}")
+
+    state = st.session_state.get("real_data_import_state")
+    if state:
+        st.subheader("上传记录")
+        st.write("raw_files.id:", state["raw_file_id"])
+        st.write("保存路径:", state["saved_path"])
+        st.write("目标表:", state.get("target_table") or "仅保存原始文件")
+
+        df = state.get("df")
+        target_table = state["target_table"]
+
+        if df is not None:
+            st.subheader("前 20 行预览")
+            st.dataframe(df.head(20), use_container_width=True)
+
+        if df is not None and target_table:
+            st.subheader("字段映射")
+            st.caption(f"{state['data_type']} 将导入到 {DATA_TYPE_TO_TABLE[state['data_type']]}")
+            raw_columns = [str(column) for column in df.columns]
+            select_options = ["不映射", *raw_columns]
+            current_mapping = state.get("mapping") or {}
+
+            with st.form("real_data_mapping_form", clear_on_submit=False):
+                selected_mapping: dict[str, str | None] = {}
+                for target_column in get_mappable_columns(target_table):
+                    guessed = current_mapping.get(target_column)
+                    default_index = select_options.index(guessed) if guessed in select_options else 0
+                    selected = st.selectbox(
+                        target_column,
+                        select_options,
+                        index=default_index,
+                        key=f"mapping_{state['raw_file_id']}_{target_column}",
+                    )
+                    selected_mapping[target_column] = None if selected == "不映射" else selected
+
+                import_submitted = st.form_submit_button("校验并导入")
+
+            if import_submitted:
+                try:
+                    report = import_dataframe_to_standard_table(
+                        raw_file_id=int(state["raw_file_id"]),
+                        raw_df=df,
+                        data_type=state["data_type"],
+                        field_mapping=selected_mapping,
+                        year=state["year"],
+                        province=state["province"],
+                        category=state["category"],
+                        source_file=state["saved_path"],
+                        source_url=state["source_url"],
+                    )
+                    _show_quality_report(report)
+                except Exception as exc:
+                    update_raw_file_status(int(state["raw_file_id"]), "failed", str(exc))
+                    st.error(f"导入失败：{exc}")
+
+    _show_real_data_bottom_sections()
+
+
 def show_recommendation() -> None:
     st.title("志愿推荐")
     st.info("推荐结果全部来自本地数据库。请先在“数据导入”页面初始化数据库并导入数据。")
@@ -208,6 +441,7 @@ def show_system_status() -> None:
 PAGES = {
     "首页": show_home,
     "数据导入": show_data_import,
+    "真实数据导入": show_real_data_import,
     "志愿推荐": show_recommendation,
     "系统状态": show_system_status,
 }

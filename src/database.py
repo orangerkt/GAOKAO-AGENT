@@ -70,6 +70,7 @@ TABLE_SCHEMAS = {
 TABLE_NAMES = tuple(TABLE_SCHEMAS.keys())
 TableCount = Union[int, str]
 CsvInput = Union[str, Path, BinaryIO]
+RecentRawFileRows = list[dict[str, object]] | None
 
 
 def get_connection() -> sqlite3.Connection:
@@ -134,6 +135,121 @@ def init_db() -> None:
                 recommended_graduate_rate REAL,
                 main_employment_regions TEXT,
                 main_employment_industries TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS raw_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_name TEXT NOT NULL,
+                file_type TEXT,
+                data_type TEXT,
+                year INTEGER,
+                source_name TEXT,
+                source_url TEXT,
+                saved_path TEXT NOT NULL,
+                upload_time TEXT DEFAULT CURRENT_TIMESTAMP,
+                parse_status TEXT,
+                parse_message TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS score_rank (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                year INTEGER,
+                province TEXT,
+                category TEXT,
+                score INTEGER,
+                cumulative_count INTEGER,
+                source_file TEXT,
+                source_url TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS control_lines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                year INTEGER,
+                province TEXT,
+                category TEXT,
+                batch TEXT,
+                control_score INTEGER,
+                source_file TEXT,
+                source_url TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS admission_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                year INTEGER,
+                province TEXT,
+                category TEXT,
+                batch TEXT,
+                university_code TEXT,
+                university_name TEXT,
+                major_group_code TEXT,
+                major_code TEXT,
+                major_name TEXT,
+                plan_count INTEGER,
+                tuition INTEGER,
+                duration TEXT,
+                subject_requirement TEXT,
+                remarks TEXT,
+                source_file TEXT,
+                source_url TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS admission_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                year INTEGER,
+                province TEXT,
+                category TEXT,
+                batch TEXT,
+                university_code TEXT,
+                university_name TEXT,
+                major_group_code TEXT,
+                major_name TEXT,
+                min_score INTEGER,
+                min_rank INTEGER,
+                max_score INTEGER,
+                max_rank INTEGER,
+                admitted_count INTEGER,
+                source_file TEXT,
+                source_url TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS subject_requirements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                year INTEGER,
+                university_code TEXT,
+                university_name TEXT,
+                major_code TEXT,
+                major_name TEXT,
+                subject_requirement TEXT,
+                source_file TEXT,
+                source_url TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS charter_constraints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                year INTEGER,
+                university_name TEXT,
+                major_name TEXT,
+                constraint_type TEXT,
+                constraint_value TEXT,
+                source_file TEXT,
+                source_url TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS civil_service_positions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                year INTEGER,
+                exam_type TEXT,
+                department TEXT,
+                position_name TEXT,
+                region TEXT,
+                education_requirement TEXT,
+                degree_requirement TEXT,
+                major_requirement TEXT,
+                political_requirement TEXT,
+                work_experience_requirement TEXT,
+                recruit_count INTEGER,
+                source_file TEXT,
+                source_url TEXT
             );
             """
         )
@@ -249,3 +365,50 @@ def get_table_counts() -> dict[str, TableCount]:
         return {table_name: "未初始化" for table_name in TABLE_NAMES}
 
     return counts
+
+
+def get_recent_raw_files(conn: sqlite3.Connection, limit: int = 20) -> RecentRawFileRows:
+    """Return recent raw file records, or None when the table is unavailable."""
+    try:
+        cursor = conn.execute(
+            """
+            SELECT
+                id,
+                file_name,
+                data_type,
+                year,
+                source_name,
+                source_url,
+                saved_path,
+                parse_status,
+                parse_message,
+                upload_time
+            FROM raw_files
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        )
+        columns = [description[0] for description in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    except sqlite3.OperationalError:
+        return None
+
+
+def get_table_row_counts(conn: sqlite3.Connection, table_names: list[str]) -> list[dict[str, object]]:
+    """Return row counts for tables without failing when a table is missing."""
+    rows: list[dict[str, object]] = []
+    for table_name in table_names:
+        if not table_name.replace("_", "").isalnum():
+            rows.append({"table_name": table_name, "row_count": 0, "status": "missing"})
+            continue
+
+        try:
+            cursor = conn.execute(f"SELECT COUNT(*) AS row_count FROM {table_name}")
+            row = cursor.fetchone()
+            row_count = int(row[0]) if row is not None else 0
+            rows.append({"table_name": table_name, "row_count": row_count, "status": "exists"})
+        except sqlite3.OperationalError:
+            rows.append({"table_name": table_name, "row_count": 0, "status": "missing"})
+
+    return rows
